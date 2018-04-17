@@ -6,6 +6,7 @@ defmodule Exq.Redis.Connection do
   require Logger
 
   alias Exq.Support.Config
+  import Exq.Support.Opts, only: [redis_worker_module: 0]
 
   def flushdb!(redis) do
     {:ok, res} = q(redis, ["flushdb"])
@@ -24,6 +25,21 @@ defmodule Exq.Redis.Connection do
 
   def get!(redis, key) do
     {:ok, val} = q(redis, ["GET", key])
+    val
+  end
+
+  def hget!(redis, key, field) do
+    {:ok, val} = q(redis, ["HGET", key, field])
+    val
+  end
+
+  def hvals!(redis, key) do
+    {:ok, val} = q(redis, ["HVALS", key])
+    val
+  end
+
+  def hlen!(redis, key) do
+    {:ok, val} = q(redis, ["HLEN", key])
     val
   end
 
@@ -155,15 +171,14 @@ defmodule Exq.Redis.Connection do
   end
 
   def q(redis, command) do
-    Redix.command(redis, command, [timeout: Config.get(:redis_timeout)])
+    redis_worker_module().command(redis, command, [timeout: Config.get(:redis_timeout)])
   end
 
   def qp(redis, command) do
-    Redix.pipeline(redis, command, [timeout: Config.get(:redis_timeout)])
+    redis_worker_module().pipeline(redis, command, [timeout: Config.get(:redis_timeout)])
   end
 
   def qp!(redis, command) do
-    Redix.pipeline!(redis, command, [timeout: Config.get(:redis_timeout)])
+    redis_worker_module().pipeline!(redis, command, [timeout: Config.get(:redis_timeout)])
   end
-
 end

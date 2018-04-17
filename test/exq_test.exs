@@ -1,6 +1,7 @@
 defmodule ExqTest do
   use ExUnit.Case
   alias Exq.Redis.JobQueue
+  alias Exq.Redis.Connection
   import ExqTestUtil
 
   defmodule PerformWorker do
@@ -76,6 +77,21 @@ defmodule ExqTest do
     {:ok, _} = Exq.enqueue(Exq, "default", ExqTest.PerformWorker, [])
     assert_receive {:worked}
     stop_process(sup)
+  end
+
+  test "enqueue and run job via redis sentinel" do
+    sentinel_args = [
+      [role: "master", group: "exq", sentinels: [[host: "127.0.0.1", port: 6666]]],
+      [database: 0, password: nil],
+      [backoff: 100, timeout: 5000, name: Exq.Redis.Client, socket_opts: []]
+    ]
+    with_application_env(:exq, :redis_worker, {RedixSentinel, sentinel_args}, fn ->
+      Process.register(self(), :exqtest)
+      {:ok, sup} = Exq.start_link
+      {:ok, _} = Exq.enqueue(Exq, "default", ExqTest.PerformWorker, [])
+      assert_receive {:worked}
+      stop_process(sup)
+    end)
   end
 
   test "run jobs from backup queue on boot" do
@@ -266,7 +282,7 @@ defmodule ExqTest do
 
     # Clear processes for this node
     host = Exq.NodeIdentifier.HostnameIdentifier.node_id()
-    Exq.Stats.Server.cleanup_host_stats(ExqP.Stats, "test", host)
+    Exq.Stats.Server.cleanup_host_stats(ExqP.Stats, "test", host, self())
 
     # Check that process has been cleared
     processes = Exq.Redis.JobStat.processes(state.redis, "test")
@@ -304,7 +320,6 @@ defmodule ExqTest do
     wait_long()
     {:ok, count} = TestStats.failed_count(state.redis, "test")
     assert count == "2"
-
 
     {:ok, jid} = Exq.enqueue(Exq, "default", "ExqTest.FailWorker/failure_perform", [])
 
@@ -373,4 +388,21 @@ defmodule ExqTest do
     stop_process(sup)
   end
 
+  test "Heartbeat set namespace:key data to redis" do
+    {:ok, sup} = Exq.start_link([])
+    :timer.sleep(1100)
+    [head | tail] = Connection.smembers!(:testredis, "test:processes")
+    assert head =~ "test"
+    stop_process(sup)
+  end
+
+  test "Simple stop" do
+    {:ok, sup} = Exq.start_link([])
+    Exq.stop(sup)
+  end
+
+  test "Stop by name" do
+    {:ok, _sup} = Exq.start_link([name: CustomManager])
+    Exq.stop(CustomManager)
+  end
 end

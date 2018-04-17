@@ -64,7 +64,7 @@ Add exq to your mix.exs deps (replace version with the latest hex.pm package ver
   defp deps do
     [
       # ... other deps
-      {:exq, "~> 0.9.0"}
+      {:exq, "~> 0.9.1"}
     ]
   end
 ```
@@ -181,6 +181,25 @@ config :exq,
       supervisor(Exq, []),
     ]
 ```
+
+### Sentinel:
+
+Exq by default uses [Redix](https://github.com/whatyouhide/redix)
+which doesn't support Redis Sentinel. To use Sentinel, add
+[RedixSentinel](https://github.com/ananthakumaran/redix_sentinel) to
+the list of dependencies. Configure `:redis_worker ({module, start_link_args})` appropriately.
+
+
+```elixir
+config :exq
+  redis_worker: {RedixSentinel, [
+      [role: "master", group: "exq", sentinels: [[host: "127.0.0.1", port: 6666]]],
+      [database: 0, password: nil],
+      [backoff: 100, timeout: 5000, name: Exq.Redis.Client, socket_opts: []]
+    ]}
+  ...
+```
+
 
 ## Using iex:
 If you'd like to try Exq out on the iex console, you can do this by typing
@@ -424,11 +443,18 @@ By default, Exq will register itself under the ```Elixir.Exq``` atom.  You can c
 {:ok, exq} = Exq.start_link(name: Exq.Custom)
 ```
 
+## Donation
+
+To donate, send to:
+
+Bitcoin (BTC): `17j52Veb8qRmVKVvTDijVtmRXvTUpsAWHv`
+Ethereum (ETH): `0xA0add27EBdB4394E15b7d1F84D4173aDE1b5fBB3`
+
+
 ## Questions?  Issues?
 
 For issues, please submit a Github issue with steps on how to reproduce the problem.
 
-For questions, stop in at the [#elixir-lang Slack group](https://elixir-slackin.herokuapp.com/)
 
 ## Contributions
 

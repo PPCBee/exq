@@ -113,6 +113,7 @@ defmodule Exq.Manager.Server do
   use GenServer
   alias Exq.Enqueuer
   alias Exq.Support.Config
+  alias Exq.Support.Time
   alias Exq.Redis.JobQueue
 
   @backoff_mult 10
@@ -120,7 +121,7 @@ defmodule Exq.Manager.Server do
   defmodule State do
     defstruct redis: nil, stats: nil, enqueuer: nil, pid: nil, node_id: nil, namespace: nil, work_table: nil,
               queues: nil, poll_timeout: nil, scheduler_poll_timeout: nil, workers_sup: nil,
-              middleware: nil, metadata: nil
+              middleware: nil, metadata: nil, started_at: nil
   end
 
   def start_link(opts\\[]) do
@@ -135,20 +136,16 @@ defmodule Exq.Manager.Server do
   def server_name(nil), do: Config.get(:name)
   def server_name(name), do: name
 
-
 ##===========================================================
 ## gen server callbacks
 ##===========================================================
 
   def init(opts) do
-
-    # Cleanup stale stats
-    GenServer.cast(self(), :cleanup_host_stats)
-
     # Setup queues
     work_table = setup_queues(opts)
 
-    state = %State{work_table: work_table,
+    state = %State{
+                   work_table: work_table,
                    redis: opts[:redis],
                    stats: opts[:stats],
                    workers_sup: opts[:workers_sup],
@@ -160,10 +157,17 @@ defmodule Exq.Manager.Server do
                    queues: opts[:queues],
                    pid: self(),
                    poll_timeout: opts[:poll_timeout],
-                   scheduler_poll_timeout: opts[:scheduler_poll_timeout]
+                   scheduler_poll_timeout: opts[:scheduler_poll_timeout],
+                   started_at: Time.unix_seconds
                    }
 
     check_redis_connection(opts)
+
+    # Cleanup stale stats
+    rescue_timeout(fn ->
+      Exq.Stats.Server.cleanup_host_stats(state.stats, state.namespace, state.node_id, state.pid)
+    end)
+
     {:ok, state, 0}
   end
 
@@ -209,16 +213,6 @@ defmodule Exq.Manager.Server do
     {:noreply, state, 0}
   end
 
-  @doc """
-  Cleanup host stats on boot
-  """
-  def handle_cast(:cleanup_host_stats, state) do
-    rescue_timeout(fn ->
-      Exq.Stats.Server.cleanup_host_stats(state.stats, state.namespace, state.node_id)
-    end)
-    {:noreply, state, 0}
-  end
-
   def handle_cast({:job_terminated, _namespace, queue, _job_serialized}, state) do
     update_worker_count(state.work_table, queue, -1)
     {:noreply, state, 0}
@@ -227,6 +221,11 @@ defmodule Exq.Manager.Server do
   def handle_info(:timeout, state) do
     {updated_state, timeout} = dequeue_and_dispatch(state)
     {:noreply, updated_state, timeout}
+  end
+
+  def handle_info({:get_state, pid, name, status}, state) do
+    GenServer.cast(pid, {:heartbeat, state, name, status})
+    {:noreply, state, 0}
   end
 
   def handle_info(_info, state) do
@@ -248,7 +247,6 @@ defmodule Exq.Manager.Server do
   def dequeue_and_dispatch(state, queues) do
     rescue_timeout({state, state.poll_timeout}, fn ->
       jobs = Exq.Redis.JobQueue.dequeue(state.redis, state.namespace, state.node_id, queues)
-
       job_results = jobs |> Enum.map(fn(potential_job) -> dispatch_job(state, potential_job) end)
 
       cond do
@@ -296,7 +294,6 @@ defmodule Exq.Manager.Server do
     Exq.Worker.Server.work(worker)
     update_worker_count(state.work_table, queue, 1)
   end
-
 
   # Setup queues from options / configs.
 
@@ -365,7 +362,7 @@ defmodule Exq.Manager.Server do
       {:ok, _} = Exq.Redis.Connection.q(opts[:redis], ~w(PING))
     catch
       err, reason ->
-        opts = Exq.Support.Opts.redis_opts(opts)
+        opts = Exq.Support.Opts.redis_opts(opts) |> Enum.into(Map.new) |> Map.delete(:password)
         raise """
         \n\n\n#{String.duplicate("=", 100)}
         ERROR! Could not connect to Redis!
